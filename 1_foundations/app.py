@@ -1,25 +1,37 @@
-
 from dotenv import load_dotenv
 from openai import OpenAI
 import json
 import os
 import requests
 from pypdf import PdfReader
-import gradio as gr
+import gradio as gr 
 
 # Cargamos las variables de entorno desde el archivo .env
 load_dotenv(override=True)
 
 def push(text):
-    """Envía notificaciones push en tiempo real a tu móvil mediante Pushover."""
-    requests.post(
-        "https://api.pushover.net/1/messages.json",
-        data={
-            "token": os.getenv("PUSHOVER_TOKEN"),
-            "user": os.getenv("PUSHOVER_USER"),
-            "message": text,
-        }
-    )
+    """Envía notificaciones push en tiempo real a tu móvil mediante Pushover con control de errores."""
+    token = os.getenv("PUSHOVER_TOKEN")
+    user = os.getenv("PUSHOVER_USER")
+    
+    # Imprime en los logs de Hugging Face si las claves están vacías
+    if not token or not user:
+        print("ERROR: PUSHOVER_TOKEN o PUSHOVER_USER no están configurados en el entorno.", flush=True)
+        return
+
+    try:
+        response = requests.post(
+            "https://api.pushover.net/1/messages.json",
+            data={
+                "token": token,
+                "user": user,
+                "message": text,
+            },
+            timeout=5
+        )
+        print(f"Resultado Pushover API: {response.status_code} - {response.text}", flush=True)
+    except Exception as e:
+        print(f"Error crítico al enviar Pushover: {e}", flush=True)
 
 
 def record_user_details(email, name="Name not provided", notes="not provided"):
@@ -32,17 +44,16 @@ def record_unknown_question(question):
     push(f"Pregunta no respondida registrada: {question}")
     return {"recorded": "ok"}
 
-# FUNCION DE HERRAMIENTAS  PARA REGISTAR
-#  descripciones del JSON para que Llama entienda mejor el contexto 
+# JSON para que Llama entienda mejor el contexto de las herramientas
 record_user_details_json = {
     "name": "record_user_details",
-    "description": "Utiliza esta herramienta para registrar que un usuario está interesado en estar en contacto y proporcionó una dirección de correo electrónico",
+    "description": "Utiliza esta herramienta única y exclusivamente cuando el usuario te proporcione explícitamente su correo electrónico.",
     "parameters": {
         "type": "object",
         "properties": {
             "email": {
                 "type": "string",
-                "description": "La dirección de correo electrónico de este usuario"
+                "description": "La dirección de correo electrónico del usuario"
             },
             "name": {
                 "type": "string",
@@ -50,7 +61,7 @@ record_user_details_json = {
             },
             "notes": {
                 "type": "string",
-                "description": "Cualquier información adicional sobre la conversación que merezca ser registrada para dar contexto"
+                "description": "Breve resumen del motivo del contacto"
             }
         },
         "required": ["email"],
@@ -58,17 +69,15 @@ record_user_details_json = {
     }
 }
 
-# FUNCION PARA PREGUNTAS QUE NO SABE
-#   descripciones del JSON 
 record_unknown_question_json = {
     "name": "record_unknown_question",
-    "description": "Siempre use esta herramienta para registrar cualquier pregunta que no se pueda responder, ya que no sabía la respuesta",
+    "description": "Utiliza esta herramienta para registrar cualquier pregunta técnica o personal sobre Jose Manuel que no puedas responder con la información disponible.",
     "parameters": {
         "type": "object",
         "properties": {
             "question": {
                 "type": "string",
-                "description": "La pregunta que no se pudo responder"
+                "description": "La pregunta exacta que no se pudo responder"
             },
         },
         "required": ["question"],
@@ -76,7 +85,6 @@ record_unknown_question_json = {
     }
 }
 
-# Empaquetamos las herramientas en el formato requerido por la API
 tools = [{"type": "function", "function": record_user_details_json},
         {"type": "function", "function": record_unknown_question_json}]
 
@@ -84,7 +92,6 @@ tools = [{"type": "function", "function": record_user_details_json},
 class Me:
 
     def __init__(self):
-        #  Configurado el cliente para conectar con Groq usando tu API key del .env
         self.openai = OpenAI(
             base_url="https://api.groq.com/openai/v1",
             api_key=os.getenv("GROQ_API_KEY")
@@ -104,7 +111,6 @@ class Me:
         with open("me/summary.txt", "r", encoding="utf-8") as f:
             self.summary = f.read()
 
-
     def handle_tool_call(self, tool_calls):
         """Mapeador dinámico encargado de buscar y ejecutar las funciones nativas de Python."""
         results = []
@@ -119,24 +125,19 @@ class Me:
     
     def system_prompt(self):
         """Define las instrucciones de comportamiento, la personalidad y el conocimiento del clon."""
-        # [CAMBIO JOSÉ] Traducido el prompt del sistema íntegramente al castellano con refuerzo de herramientas
-        system_prompt = f"Actúas como {self.name}. Estás respondiendo preguntas en el sitio web de {self.name}, " \
-                        f"particularmente preguntas relacionadas con la carrera, antecedentes, habilidades y experiencia de {self.name}. " \
-                        f"Tu responsabilidad es representar a {self.name} en las interacciones del sitio web de la manera más fiel posible. " \
-                        f"Se te proporciona un resumen de la trayectoria de {self.name} y su perfil de LinkedIn que puedes utilizar para responder preguntas. " \
-                        f"Sé profesional y carismático, como si estuvieras hablando con un cliente potencial o un futuro empleador que se topó con el sitio web. " \
-                        f"Si no sabes la respuesta a alguna pregunta, utiliza tu herramienta 'record_unknown_question' para registrar la pregunta que no pudiste responder, " \
-                        f"incluso si es sobre algo trivial o no relacionado con la carrera. " \
-                        f"Si el usuario entabla una conversación, intenta orientarlo para que se ponga en contacto por correo electrónico; " \
-                        f"pídele su correo electrónico y regíslalo utilizando tu herramienta 'record_user_details'."
+        system_prompt = f"Actúas como {self.name}. Estás respondiendo preguntas en tu sitio web personal. " \
+                        f"Respondes de manera profesional, carismática y directa a reclutadores o clientes. " \
+                        f"REGLA CRÍTICA DE HERRAMIENTAS:\n" \
+                        f"1. NO inventes datos. Si el usuario no te ha dado su email, NO uses 'record_user_details' con valores como 'unknown'. " \
+                        f"2. Pide el correo amablemente si quieren contactar contigo. " \
+                        f"3. Cuando decidas llamar a una herramienta, hazlo de manera limpia, sin escribir código JSON o formatos extraños como '<function=...>' en tu respuesta de texto."
 
-        system_prompt += f"\n\n## Resumen:\n{self.summary}\n\n## Perfil de LinkedIn:\n{self.linkedin}\n\n"
-        system_prompt += f"Con este contexto, por favor conversa con el usuario, manteniéndote siempre en el personaje de {self.name}."
+        system_prompt += f"\n\n## Tu Resumen Profesional:\n{self.summary}\n\n## Tu Perfil de LinkedIn:\n{self.linkedin}\n\n"
+        system_prompt += f"Conversa siempre en primera persona del singular, tú eres {self.name}."
         return system_prompt
     
     def chat(self, message, history):
-        """Gestiona el flujo conversacional y resuelve el bucle de ejecución de herramientas."""
-        # Implementado el filtro estricto anti-error 400 para eliminar los metadatos ocultos de Gradio
+        """Gestiona el flujo conversacional solucionando el bucle infinito de Groq."""
         clean_history = []
         for h in history:
             clean_history.append({
@@ -144,32 +145,42 @@ class Me:
                 "content": h["content"]
             })
 
-        # Construimos el payload oficial combinando el prompt de sistema, el historial limpio y el nuevo mensaje
         messages = [{"role": "system", "content": self.system_prompt()}] + clean_history + [{"role": "user", "content": message}]
         
+        final_text_response = ""
         done = False
+        
         while not done:
-            #  Cambiado el modelo de OpenAI por el modelo Llama 3.3 de Groq
             response = self.openai.chat.completions.create(
                 model="llama-3.3-70b-versatile", 
                 messages=messages, 
                 tools=tools
             )
             
+            message_obj = response.choices[0].message
+            
+            # Si Llama generó texto junto con la llamada o al final, lo guardamos
+            if message_obj.content:
+                final_text_response = message_obj.content
+            
             # Verificamos si Groq ha solicitado la ejecución de alguna herramienta
-            if response.choices[0].finish_reason == "tool_calls":
-                message_obj = response.choices[0].message
+            if message_obj.tool_calls:
                 tool_calls = message_obj.tool_calls
                 results = self.handle_tool_call(tool_calls)
                 messages.append(message_obj)
                 messages.extend(results)
+                # Opcional: Podríamos forzar un break aquí si ya capturamos texto, 
+                # pero dejamos que complete el ciclo para actualizar el contexto interno.
             else:
                 done = True
                 
-        return response.choices[0].message.content
+        # Corrección de formato para limpiar respuestas en caso de residuos de Llama
+        if not final_text_response:
+            final_text_response = "¡Entendido! He tomado nota de ello."
+            
+        return final_text_response
     
 
 if __name__ == "__main__":
-    # Instanciamos la clase con tus configuraciones e iniciamos la interfaz gráfica
     me = Me()
     gr.ChatInterface(me.chat, type="messages").launch()
